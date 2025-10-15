@@ -831,3 +831,383 @@ uv pip install dropbox python-dotenv
 # Run script directly
 uv run python src/explore.py
 ```
+
+---
+
+## PDF Report Generator
+
+Generate comprehensive PDF reports from session files with statistics and charts.
+
+### Overview
+
+The report generator processes all `.pkl` session files in the `OUTPUT_DIR` and creates a PDF report with:
+
+- Overall summary across all directories
+- **Duplicate file analysis** (automatically included)
+- Individual directory statistics
+- File type distribution charts (pie charts)
+- Storage size by category charts (bar charts)
+- Detailed category breakdowns with file counts and sizes
+
+### Installation
+
+The report generator requires additional dependencies:
+
+```bash
+uv sync
+```
+
+This will install:
+- `matplotlib` - For generating charts
+- `reportlab` - For PDF generation
+
+### Usage
+
+#### Basic Usage
+
+Generate a report from all `.pkl` files in the default data directory:
+
+```bash
+uv run report
+```
+
+This will create `dropbox_report.pdf` in the `OUTPUT_DIR` (default: `data/`).
+
+#### Custom Output File
+
+Specify a custom output filename:
+
+```bash
+uv run report -o my_report.pdf
+```
+
+#### Custom Data Directory
+
+Specify a different directory containing `.pkl` files:
+
+```bash
+uv run report -d /path/to/data -o custom_report.pdf
+```
+
+#### Command-Line Options
+
+```
+-o, --output <filename>     Output PDF filename (default: dropbox_report.pdf)
+-d, --data-dir <directory>  Directory containing .pkl files (default: OUTPUT_DIR env or 'data')
+```
+
+### How It Works
+
+The script follows these steps:
+
+1. **Loads session data**: Reads all `.pkl` files from the specified directory
+2. **Analyzes statistics**: For each session:
+   - Counts files, folders, and total size
+   - Categorizes files by type (Image, Video, Document, etc.)
+   - Calculates file counts and storage per category
+3. **Detects duplicates**: Automatically scans for duplicate files across all sessions (see [Duplicate File Detector](#duplicate-file-detector))
+4. **Generates charts**: Creates visualizations:
+   - Pie charts for file type distribution (by count)
+   - Bar charts for storage size by category
+5. **Builds PDF report**: Assembles a comprehensive report with:
+   - Title page with overall summary
+   - Duplicate file analysis section with top 10 largest duplicate groups
+   - Individual pages for each directory with tables and charts
+
+### Implementation Details
+
+#### File Type Categories
+
+Files are automatically categorized into:
+
+- **Image**: jpg, png, gif, svg, etc.
+- **Video**: mp4, avi, mkv, mov, etc.
+- **Audio**: mp3, wav, flac, aac, etc.
+- **Document**: pdf, doc, docx, txt, etc.
+- **Spreadsheet**: xls, xlsx, csv, etc.
+- **Presentation**: ppt, pptx, odp, key
+- **Archive**: zip, rar, 7z, tar, gz, etc.
+- **Code**: py, js, java, cpp, html, css, etc.
+- **Data**: json, xml, yaml, sql, db, etc.
+- **Executable**: exe, msi, app, deb, rpm, etc.
+- **Other**: Unrecognized file types
+
+#### Direct Import
+
+The script imports the `explore` module directly rather than spawning shell processes:
+
+```python
+from src.explore import DropboxExplorer
+
+# Use DropboxExplorer methods like _human_readable_size()
+```
+
+This provides:
+- Better performance (no subprocess overhead)
+- Type safety and IDE support
+- Direct access to utility functions
+
+#### Output Structure
+
+The generated PDF includes:
+
+1. **Title Page**
+   - Report title
+   - Generation timestamp
+   - Overall summary table
+
+2. **Directory Pages** (one per `.pkl` file)
+   - Directory information table
+   - File type breakdown table
+   - File distribution pie chart
+   - Storage size bar chart
+
+#### Temporary Files
+
+Charts are temporarily saved to `<data_dir>/.charts/` during generation and automatically cleaned up after the PDF is created.
+
+### Examples
+
+#### Generate report for all directories:
+
+```bash
+cd /Users/mesca/Documents/Pro/Missions/TTH/code/explore
+uv run report -o dropbox_statistics.pdf
+```
+
+#### Generate report with custom data directory:
+
+```bash
+uv run report -d ~/my_dropbox_data -o analysis_report.pdf
+```
+
+### Code Quality
+
+The script follows all guidelines from `CLAUDE.md`:
+
+- Comprehensive docstrings (NumPy style)
+- Full type hints
+- Structured logging with loguru
+- Clear variable names
+- Single responsibility functions
+- Proper error handling
+
+### Troubleshooting
+
+#### No .pkl files found
+
+```
+ERROR: No .pkl files found in data
+```
+
+**Solution**: Ensure you've run `uv run explore` to create session files first, or specify the correct directory with `-d`.
+
+#### Missing dependencies
+
+```
+ModuleNotFoundError: No module named 'matplotlib'
+```
+
+**Solution**: Run `uv sync` to install all dependencies.
+
+#### Permission errors
+
+```
+ERROR: Failed to generate PDF report: [Errno 13] Permission denied
+```
+
+**Solution**: Ensure you have write permissions to the output directory.
+
+#### Session File Compatibility
+
+The report generator is compatible with all session files created by the `explore` command. It uses the `-i -j` inspection functionality internally to extract statistics without re-exploring Dropbox.
+
+---
+
+## Duplicate File Detector
+
+Identify duplicate files across all session files and calculate recoverable storage space.
+
+> **Note:** Duplicate detection is automatically included in the [PDF Report Generator](#pdf-report-generator). Use this standalone tool when you need detailed JSON output or want to analyze duplicates separately.
+
+### Overview
+
+The duplicate detector scans all `.pkl` session files in the `OUTPUT_DIR` and identifies duplicate files based on their `content_hash` metadata. This helps you:
+
+- Find identical files stored in multiple locations
+- Calculate total wasted storage space
+- Identify the largest duplicate files for cleanup priority
+- Generate detailed JSON reports of all duplicates
+
+### Usage
+
+#### Basic Usage
+
+Scan for duplicates in the default data directory:
+
+```bash
+uv run duplicates
+```
+
+This will output a summary and JSON report to stdout.
+
+#### Save Results to File
+
+Generate a JSON report file:
+
+```bash
+uv run duplicates -o duplicates_report.json
+```
+
+#### Pretty-Print JSON
+
+Format JSON output for readability:
+
+```bash
+uv run duplicates --pretty
+```
+
+#### Custom Data Directory
+
+Specify a different directory containing `.pkl` files:
+
+```bash
+uv run duplicates -d /path/to/data -o report.json
+```
+
+#### Command-Line Options
+
+```
+-d, --data-dir <directory>              Directory containing .pkl files (default: OUTPUT_DIR env or 'data')
+-o, --output <file>                     Output JSON file path (default: print to stdout)
+--pretty                                Pretty-print JSON output
+--log-level-console <level>             Console log level (NONE, DEBUG, INFO, WARNING, ERROR, CRITICAL)
+--log-level-file <level>                File log level (NONE, DEBUG, INFO, WARNING, ERROR, CRITICAL)
+```
+
+### How It Works
+
+The duplicate detector:
+
+1. **Scans session files**: Reads all `.pkl` files from the specified directory
+2. **Extracts file metadata**: Collects file paths, content hashes, and sizes
+3. **Identifies duplicates**: Groups files by their `content_hash` (Dropbox's file fingerprint)
+4. **Calculates waste**: Determines recoverable space for each duplicate group
+5. **Generates report**: Outputs JSON with summary statistics and detailed duplicate groups
+
+### Output Format
+
+The JSON report has the following structure:
+
+```json
+{
+  "summary": {
+    "total_duplicate_files": 555014,
+    "total_wasted_bytes": 703119450459,
+    "total_wasted_size": "654.83 GB",
+    "unique_hashes_with_duplicates": 209903,
+    "scanned_pkl_files": 13
+  },
+  "duplicate_groups": [
+    {
+      "content_hash": "280539fdd34a5f7b61cf8ddadcf89ce1531f2ecf6783f89447714ac9df0d2b6b",
+      "duplicate_count": 6,
+      "file_size_bytes": 2393959844,
+      "file_size_human": "2.23 GB",
+      "wasted_bytes": 11969799220,
+      "wasted_size_human": "11.15 GB",
+      "file_paths": [
+        "/path/to/file1.zip",
+        "/path/to/file2.zip",
+        ...
+      ]
+    },
+    ...
+  ]
+}
+```
+
+#### Summary Fields
+
+- `total_duplicate_files`: Total number of duplicate copies (excluding originals)
+- `total_wasted_bytes`: Total recoverable storage space in bytes
+- `total_wasted_size`: Human-readable total wasted space
+- `unique_hashes_with_duplicates`: Number of unique files that have duplicates
+- `scanned_pkl_files`: Number of session files analyzed
+
+#### Duplicate Group Fields
+
+- `content_hash`: Dropbox content hash identifying the file
+- `duplicate_count`: Number of copies of this file
+- `file_size_bytes`: Size of one instance in bytes
+- `file_size_human`: Human-readable file size
+- `wasted_bytes`: Recoverable space for this group (file_size × (duplicate_count - 1))
+- `wasted_size_human`: Human-readable wasted space
+- `file_paths`: List of all paths where this file appears
+
+### Examples
+
+#### Generate duplicate report with pretty formatting:
+
+```bash
+cd /Users/mesca/Documents/Pro/Missions/TTH/code/explore
+uv run duplicates --pretty -o data/duplicates.json
+```
+
+#### Scan custom directory:
+
+```bash
+uv run duplicates -d ~/my_dropbox_data --pretty
+```
+
+#### Silent mode (only JSON output):
+
+```bash
+uv run duplicates --log-level-console NONE -o report.json
+```
+
+### Understanding Content Hash
+
+Dropbox's `content_hash` is a cryptographic hash that uniquely identifies file content:
+
+- Files with identical content have the same hash, regardless of name or location
+- Even if a file is renamed or moved, its hash remains the same
+- Different files will have different hashes (with extremely high probability)
+- This makes it perfect for identifying true duplicates vs. files with similar names
+
+### Use Cases
+
+1. **Storage Cleanup**: Identify large duplicate files consuming significant space
+2. **Data Deduplication**: Find files that can be replaced with links or references
+3. **Archive Analysis**: Understand redundancy in archived project folders
+4. **Migration Planning**: Calculate actual unique data size before migration
+5. **Compliance**: Ensure no duplicate copies of sensitive files exist
+
+### Code Quality
+
+The script follows all guidelines from `CLAUDE.md`:
+
+- Comprehensive docstrings (NumPy style)
+- Full type hints
+- Structured logging with loguru
+- Clear variable names
+- Single responsibility functions
+- Proper error handling
+
+### Troubleshooting
+
+#### No .pkl files found
+
+```
+ERROR: No .pkl files found in data
+```
+
+**Solution**: Ensure you've run `uv run explore` to create session files first, or specify the correct directory with `-d`.
+
+#### Large datasets
+
+For very large session files (100k+ files), the analysis may take several minutes. Progress is logged to help track the operation.
+
+#### Memory usage
+
+The tool loads all file metadata into memory. For extremely large datasets (1M+ files), ensure you have sufficient RAM available.
