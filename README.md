@@ -549,37 +549,34 @@ uv run explore
 The explorer supports several command-line flags for different workflows. All these options work with any of the three run methods above (console script, module, or direct script).
 
 ```bash
-# Continue from default session
+# Continue from default session (auto-detected)
 uv run explore -c
 
-# Continue from specific session file
-uv run explore -c session_abc123.pkl
+# Continue from specific session by name
+uv run explore -c mysession
 
-# Continue from specific session
-uv run explore -c -s my_session
+# Continue from specific session file
+uv run explore -c mysession.pkl
 
 # Inspect default session (view stats without exploring)
 uv run explore -i
 
-# Inspect specific session file
-uv run explore -i session_abc123.pkl
+# Inspect specific session by name
+uv run explore -i mysession
 
-# Inspect specific session session
-uv run explore -i -s my_session
+# Inspect with JSON output (for scripting)
+uv run explore -i -j
 
 # Extract default session to JSON without re-exploring
 uv run explore -x
 
-# Extract specific session file
-uv run explore -x session_abc123.pkl
-
-# Extract specific session session
-uv run explore -x -s my_session
+# Extract specific session by name
+uv run explore -x mysession
 
 # Specify a custom root folder path within the shared link
 uv run explore -p /subfolder/path
 
-# Specify a custom session/session name for new exploration
+# Specify a custom session name for new exploration
 uv run explore -s my_custom_session
 
 # Combine flags
@@ -587,11 +584,12 @@ uv run explore -s my_session -p /Documents
 ```
 
 **Available Flags:**
-- `-c, --continue [SESSION]` - Continue from session. Uses default session if no file specified. Use with `-s` to specify session name.
-- `-i, --inspect [SESSION]` - Inspect session and show statistics. Uses default session if no file specified. Use with `-s` to specify session name.
-- `-x, --extract [SESSION]` - Extract session to JSON. Uses default session if no file specified. Use with `-s` to specify session name.
-- `-p, --path PATH` - Specify root folder path within shared link (overrides ROOT_FOLDER env var)
-- `-s, --session NAME` - Specify custom session/session name (overrides SESSION_NAME env var and auto-generated name)
+- `-c, --continue [SESSION]` - Continue from session. Provide session name (e.g., 'mysession' or 'mysession.pkl') or use without argument for default session.
+- `-i, --inspect [SESSION]` - Inspect session and show statistics. Provide session name (e.g., 'mysession' or 'mysession.pkl') or use without argument for default session.
+- `-x, --extract [SESSION]` - Extract session to JSON. Provide session name (e.g., 'mysession' or 'mysession.pkl') or use without argument for default session.
+- `-p, --path PATH` - Override ROOT_FOLDER env var - specify path within shared link to explore
+- `-s, --session NAME` - Specify session name (overrides SESSION_NAME env var and auto-generated name)
+- `-j, --json` - Output inspection results as JSON (use with -i flag)
 
 ### Long-Running Operation
 
