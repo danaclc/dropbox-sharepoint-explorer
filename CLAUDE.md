@@ -2,10 +2,6 @@
 
 > For project-specific requirements and conventions, see `PROJECT.md`
 
-## Core Concepts
-
-
-
 ## Code Quality Standards
 
 ### General Principles
@@ -350,7 +346,7 @@ logger.info(f"Starting export of {total_items} items")
 
 for i, item in enumerate(items, 1):
     process_item(item)
-    
+
     # Log at intervals
     if i % 1000 == 0:
         logger.info(f"Progress: {i}/{total_items} items processed")

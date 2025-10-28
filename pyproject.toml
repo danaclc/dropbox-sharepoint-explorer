@@ -16,6 +16,7 @@ dependencies = [
 explore = "src.explore:main"
 report = "src.report:main"
 duplicates = "src.duplicates:main"
+combine = "src.combine:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

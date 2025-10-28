@@ -10,6 +10,7 @@ A robust Python tool to recursively explore Dropbox shared/public links and expo
 - **Comprehensive Export** - Exports file/folder structure, sizes, timestamps, content hashes to JSON
 - **PDF Report Generation** - Create comprehensive PDF reports with statistics and charts
 - **Duplicate File Detection** - Identify duplicate files and calculate recoverable storage space
+- **JSON File Combiner** - Merge multiple JSON exports and remove duplicates by path depth
 - **Graceful Error Handling** - Continues on restricted items, logs detailed errors
 - **Production-Ready** - Atomic writes, crash recovery, structured logging with rotation
 
@@ -135,6 +136,18 @@ uv run duplicates -o duplicates.json --pretty
 
 # Custom data directory
 uv run duplicates -d /path/to/data --pretty
+```
+
+**Combine JSON Files:**
+```bash
+# Merge all JSON files and remove duplicates
+uv run combine
+
+# Custom output file
+uv run combine -o combined.json
+
+# Custom data directory
+uv run combine -d /path/to/json/files
 ```
 
 ---
@@ -489,6 +502,63 @@ uv run duplicates -d /path/to/data
 - Archive analysis
 - Migration planning (calculate unique data size)
 - Compliance checks
+
+### JSON File Combiner
+
+Merge multiple JSON export files into a single unified file with smart deduplication.
+
+**Features:**
+- Combines all JSON files from multiple explorations
+- Removes duplicate files based on content hash
+- Keeps files at shallowest path depth (closest to root)
+- Comprehensive statistics and duplicate report
+- Preserves all file metadata
+
+**Usage:**
+```bash
+# Basic usage (merges all JSON in data/ directory)
+uv run combine
+
+# Custom options
+uv run combine -o all.json -d /path/to/json/files
+```
+
+**Options:**
+- `-d, --data-dir <directory>` - Directory with JSON files (default: `OUTPUT_DIR`)
+- `-o, --output <filename>` - Output filename (default: `all.json`)
+- `--log-level-console <level>` - Console log level
+- `--log-level-file <level>` - File log level
+
+**Output:**
+```
+======================================================================
+JSON COMBINATION SUMMARY
+======================================================================
+Source files processed:   12
+Total files found:        1,026,757
+Unique files kept:        759,529
+Duplicate files removed:  267,228
+Total unique file size:   1.74 TB
+Space saved by dedup:     254.39 GB
+
+Output file: data/all.json
+======================================================================
+```
+
+**How It Works:**
+1. Scans all `.json` files in the data directory
+2. Extracts all files from nested structures
+3. Groups files by `content_hash`
+4. For duplicates, keeps the file at the shallowest path depth
+5. Outputs unified JSON with metadata and statistics
+
+**Use Cases:**
+- Combine exports from multiple shared links
+- Create unified file catalog
+- Identify cross-folder duplicates
+- Calculate true unique data volume
+
+See [docs/combine.md](docs/combine.md) for detailed documentation.
 
 ---
 
