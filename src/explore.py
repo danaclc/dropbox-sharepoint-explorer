@@ -849,6 +849,12 @@ def main() -> None:
         description="Dropbox Public Link Explorer - Recursively explores shared Dropbox folders"
     )
     parser.add_argument(
+        "--provider",
+        choices=["dropbox", "sharepoint"],
+        default="dropbox",
+        help="Data source to explore (default: dropbox).",
+    )
+    parser.add_argument(
         "-c",
         "--continue",
         dest="auto_continue",
@@ -900,6 +906,13 @@ def main() -> None:
         help="Output inspection results as JSON (use with -i flag)",
     )
     args = parser.parse_args()
+
+    if args.provider == "sharepoint":
+        logger.error(
+            "SharePoint provider is not implemented yet. "
+            "For now, run with: --provider dropbox"
+        )
+        return
 
     # Configure logging from environment variables
     # Logging is now configured in __main__.py
@@ -1336,6 +1349,7 @@ def main() -> None:
 
             logger.info(f"Timestamp: {checkpoint_data.get('timestamp', 'Unknown')}")
             logger.info(f"Total items: {len(checkpoint_data.get('all_items', []))}")
+
 
             # Create a temporary explorer instance (no API access needed)
             explorer = DropboxExplorer(
