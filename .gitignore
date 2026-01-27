@@ -19,3 +19,5 @@ data/*.pkl
 # Log files
 logs/
 *.log
+
+.env
