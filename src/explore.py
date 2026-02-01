@@ -932,11 +932,21 @@ def main() -> None:
         # Minimal export: flat list (paths) + basic metadata
         entries = []
 
+        progress = {"seen": 0}
+
         def walk(folder_id: str, parent_path: str) -> None:
             for item in client.iter_children(drive_id, folder_id):
                 name = item.get("name", "")
                 is_folder = "folder" in item
                 path = f"{parent_path}/{name}".replace("//", "/")
+
+                progress["seen"] += 1
+                if progress["seen"] % 1000 == 0:
+                    logger.info(
+                        "SharePoint: scanned %d items… latest=%s",
+                        progress["seen"],
+                        path,
+                    )
 
                 if is_folder:
                     entries.append({"type": "folder", "path": path})
