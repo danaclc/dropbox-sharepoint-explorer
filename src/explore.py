@@ -910,7 +910,10 @@ def main() -> None:
     if args.provider == "sharepoint":
         from src.providers.sharepoint_graph import load_sp_config, SharePointGraphClient
         import json
+        import pickle
+        import re
         import time
+        from collections import deque
         from pathlib import Path
 
         cfg = load_sp_config()
@@ -932,70 +935,141 @@ def main() -> None:
         root_item = client.resolve_root_item(drive_id)
         root_id = root_item["id"]
 
-        # Output paths
+        # --- session name resolution (supports: -c mysession, -s mysession, env SESSION_NAME) ---
+        continue_name = args.auto_continue if isinstance(args.auto_continue, str) else None
+        explicit_session = continue_name or getattr(args, "session_name", None)
+
+        raw_name = determine_checkpoint_name(
+            f"sharepoint://{cfg.hostname}{cfg.site_path}",
+            cfg.root_folder or "",
+            explicit_session,
+        )
+
+        # If user provided a session name (via -c NAME or -s NAME), use it directly
+        if explicit_session:
+            checkpoint_name = re.sub(r"[^A-Za-z0-9._-]+", "_", explicit_session)
+        else:
+            checkpoint_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name)
+
+        # --- output files ---
         out_dir = Path(os.environ.get("OUTPUT_DIR", "data"))
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        session_name = os.environ.get("SESSION_NAME", "sharepoint_session")
-        out_path = out_dir / f"{session_name}.sharepoint.json"
-        partial_path = out_dir / f"{session_name}.sharepoint.partial.json"
+        checkpoint_file = out_dir / f"{checkpoint_name}.sharepoint.pkl"
+        checkpoint_tmp  = out_dir / f"{checkpoint_name}.sharepoint.pkl.tmp"
+        out_path        = out_dir / f"{checkpoint_name}.sharepoint.json"
 
-        # Data + progress
-        entries = []
-        progress = {"seen": 0}
+        def load_sp_checkpoint():
+            if not checkpoint_file.exists():
+                return None
+            try:
+                with open(checkpoint_file, "rb") as f:
+                    return pickle.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load SharePoint checkpoint: {e}")
+                return None
+
+        def save_sp_checkpoint(state: dict) -> None:
+            try:
+                with open(checkpoint_tmp, "wb") as f:
+                    pickle.dump(state, f)
+                os.replace(checkpoint_tmp, checkpoint_file)
+                logger.info(f"SharePoint: checkpoint saved to {checkpoint_file}")
+            except Exception as e:
+                logger.warning(f"Failed to save SharePoint checkpoint: {e}")
+
+        # --- resume state if -c/--continue set ---
+        state = None
+        if getattr(args, "auto_continue", False):
+            state = load_sp_checkpoint()
+            if state and state.get("provider") and state.get("provider") != "sharepoint":
+                logger.error("Checkpoint provider mismatch (expected sharepoint).")
+                return
+
+        if state:
+            logger.info("SharePoint: resuming from checkpoint…")
+            drive_id = state.get("drive_id", drive_id)
+            root_id  = state.get("root_id", root_id)
+            entries  = state.get("entries", [])
+            visited  = set(state.get("visited", []))
+            progress = {"seen": int(state.get("progress_seen", 0))}
+            queue    = deque(state.get("queue", []))
+        else:
+            entries  = []
+            visited  = set()
+            progress = {"seen": 0}
+            queue    = deque([(root_id, "")])
+
+        interval = int(os.environ.get("SESSION_INTERVAL_SECONDS", "300"))
         last_save = {"t": time.time()}
 
-        def save_partial() -> None:
-            payload_partial = {
-                "source": "sharepoint",
+        def build_state() -> dict:
+            return {
+                "provider": "sharepoint",
                 "site_id": site_id,
-                "drive_name": cfg.drive_name,
-                "root_folder": cfg.root_folder,
-                "count": len(entries),
+                "drive_id": drive_id,
+                "root_id": root_id,
+                "queue": list(queue),
+                "visited": list(visited),
                 "entries": entries,
-                "partial": True,
+                "progress_seen": progress["seen"],
+                "cfg": {
+                    "hostname": cfg.hostname,
+                    "site_path": cfg.site_path,
+                    "drive_name": cfg.drive_name,
+                    "root_folder": cfg.root_folder,
+                },
             }
-            partial_path.write_text(
-                json.dumps(payload_partial, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            logger.info(f"SharePoint: checkpoint wrote {partial_path}")
+
+        def save_checkpoint() -> None:
+            save_sp_checkpoint(build_state())
             last_save["t"] = time.time()
 
-        def walk(folder_id: str, parent_path: str) -> None:
-            for item in client.iter_children(drive_id, folder_id):
-                name = item.get("name", "")
-                is_folder = "folder" in item
-                path = f"{parent_path}/{name}".replace("//", "/")
+        logger.info("SharePoint: crawling… (queue mode)")
+        try:
+            while queue:
+                folder_id, parent_path = queue.pop()  # DFS (use popleft() for BFS)
+                if folder_id in visited:
+                    continue
+                visited.add(folder_id)
 
-                progress["seen"] += 1
-                if progress["seen"] % 1000 == 0:
-                    logger.info(
-                        "SharePoint: scanned %d items… latest=%s",
-                        progress["seen"],
-                        path,
-                    )
+                for item in client.iter_children(drive_id, folder_id):
+                    name = item.get("name", "")
+                    is_folder = "folder" in item
+                    path = f"{parent_path}/{name}".replace("//", "/")
 
-                # checkpoint every ~2 minutes
-                if time.time() - last_save["t"] > 120:
-                    save_partial()
+                    progress["seen"] += 1
+                    if progress["seen"] % 1000 == 0:
+                        logger.info(
+                            "SharePoint: scanned %d items… latest=%s",
+                            progress["seen"],
+                            path,
+                        )
 
-                if is_folder:
-                    entries.append({"type": "folder", "path": path})
-                    walk(item["id"], path)
-                else:
-                    entries.append(
-                        {
-                            "type": "file",
-                            "path": path,
-                            "size": item.get("size"),
-                            "lastModifiedDateTime": item.get("lastModifiedDateTime"),
-                        }
-                    )
+                    if is_folder:
+                        entries.append({"type": "folder", "path": path})
+                        queue.append((item["id"], path))
+                    else:
+                        entries.append(
+                            {
+                                "type": "file",
+                                "path": path,
+                                "size": item.get("size"),
+                                "lastModifiedDateTime": item.get("lastModifiedDateTime"),
+                            }
+                        )
 
-        logger.info("SharePoint: crawling…")
-        walk(root_id, "")
+                    if time.time() - last_save["t"] > interval:
+                        save_checkpoint()
 
+        except KeyboardInterrupt:
+            logger.warning("SharePoint: interrupted — saving checkpoint…")
+            save_checkpoint()
+            logger.success("SharePoint: checkpoint saved. Re-run with -c to resume.")
+            return
+
+        # Final checkpoint + export
+        save_checkpoint()
         payload = {
             "source": "sharepoint",
             "site_id": site_id,
@@ -1004,7 +1078,6 @@ def main() -> None:
             "count": len(entries),
             "entries": entries,
         }
-
         out_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
