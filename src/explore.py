@@ -909,6 +909,9 @@ def main() -> None:
 
     if args.provider == "sharepoint":
         from src.providers.sharepoint_graph import load_sp_config, SharePointGraphClient
+        import json
+        import time
+        from pathlib import Path
 
         cfg = load_sp_config()
         client = SharePointGraphClient(cfg)
@@ -929,10 +932,35 @@ def main() -> None:
         root_item = client.resolve_root_item(drive_id)
         root_id = root_item["id"]
 
-        # Minimal export: flat list (paths) + basic metadata
-        entries = []
+        # Output paths
+        out_dir = Path(os.environ.get("OUTPUT_DIR", "data"))
+        out_dir.mkdir(parents=True, exist_ok=True)
 
+        session_name = os.environ.get("SESSION_NAME", "sharepoint_session")
+        out_path = out_dir / f"{session_name}.sharepoint.json"
+        partial_path = out_dir / f"{session_name}.sharepoint.partial.json"
+
+        # Data + progress
+        entries = []
         progress = {"seen": 0}
+        last_save = {"t": time.time()}
+
+        def save_partial() -> None:
+            payload_partial = {
+                "source": "sharepoint",
+                "site_id": site_id,
+                "drive_name": cfg.drive_name,
+                "root_folder": cfg.root_folder,
+                "count": len(entries),
+                "entries": entries,
+                "partial": True,
+            }
+            partial_path.write_text(
+                json.dumps(payload_partial, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info(f"SharePoint: checkpoint wrote {partial_path}")
+            last_save["t"] = time.time()
 
         def walk(folder_id: str, parent_path: str) -> None:
             for item in client.iter_children(drive_id, folder_id):
@@ -948,29 +976,25 @@ def main() -> None:
                         path,
                     )
 
+                # checkpoint every ~2 minutes
+                if time.time() - last_save["t"] > 120:
+                    save_partial()
+
                 if is_folder:
                     entries.append({"type": "folder", "path": path})
                     walk(item["id"], path)
                 else:
-                    entries.append({
-                        "type": "file",
-                        "path": path,
-                        "size": item.get("size"),
-                        "lastModifiedDateTime": item.get("lastModifiedDateTime"),
-                    })
+                    entries.append(
+                        {
+                            "type": "file",
+                            "path": path,
+                            "size": item.get("size"),
+                            "lastModifiedDateTime": item.get("lastModifiedDateTime"),
+                        }
+                    )
 
         logger.info("SharePoint: crawling…")
         walk(root_id, "")
-
-        # Write JSON next to other outputs (same output dir logic as Dropbox uses)
-        import json
-        from pathlib import Path
-
-        out_dir = Path(os.environ.get("OUTPUT_DIR", "data"))
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        session_name = os.environ.get("SESSION_NAME", "sharepoint_session")
-        out_path = out_dir / f"{session_name}.sharepoint.json"
 
         payload = {
             "source": "sharepoint",
@@ -981,561 +1005,13 @@ def main() -> None:
             "entries": entries,
         }
 
-        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        out_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         logger.info(f"SharePoint: wrote {out_path}")
         return
 
-    # Configure logging from environment variables
-    # Logging is now configured in __main__.py
-
-    # Handle inspection mode (-i flag)
-    if args.inspect:
-        output_dir = os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
-
-        logger.info("Session Inspection Mode")
-
-        # Get session file - from argument or use default
-        checkpoint_file = None
-
-        if isinstance(args.inspect, str):
-            # Session file path provided as argument
-            checkpoint_file = args.inspect
-
-            # Auto-append .pkl extension if not present
-            if not checkpoint_file.endswith(".pkl"):
-                checkpoint_file += ".pkl"
-
-            # If not an absolute path, treat it relative to output_dir
-            if not os.path.isabs(checkpoint_file):
-                checkpoint_file = os.path.join(output_dir, checkpoint_file)
-            if not os.path.exists(checkpoint_file):
-                logger.error(f"Session file not found: {checkpoint_file}")
-                sys.exit(1)
-        else:
-            # No argument provided - use default session
-            # Need to determine session name from environment
-            shared_link = os.getenv("DROPBOX_SHARED_LINK", "")
-            root_folder = os.getenv("ROOT_FOLDER", "").strip()
-            if root_folder and not root_folder.startswith("/"):
-                root_folder = "/" + root_folder
-
-            checkpoint_name = determine_checkpoint_name(
-                args.session_name, shared_link, root_folder
-            )
-            checkpoint_file = os.path.join(output_dir, f"{checkpoint_name}.pkl")
-
-            if not os.path.exists(checkpoint_file):
-                logger.error(f"Default session file not found: {checkpoint_file}")
-                logger.info("Use -s <session_name> to specify a different session")
-                sys.exit(1)
-
-        try:
-            logger.info(f"Loading session: {os.path.basename(checkpoint_file)}")
-            logger.info(f"Path: {checkpoint_file}")
-
-            with open(checkpoint_file, "rb") as f:
-                checkpoint_data = pickle.load(f)
-
-            # Extract basic information
-            timestamp = checkpoint_data.get("timestamp", "Unknown")
-            shared_link = checkpoint_data.get("shared_link", "Unknown")
-            root_folder = checkpoint_data.get("root_folder", "")
-            all_items = checkpoint_data.get("all_items", [])
-            visited_paths = checkpoint_data.get("visited_paths", [])
-            restricted_items = checkpoint_data.get("restricted_items", [])
-
-            # Calculate statistics
-            files = [item for item in all_items if item.get("type") == "file"]
-            folders = [item for item in all_items if item.get("type") == "folder"]
-            total_size = sum(item.get("size", 0) for item in files)
-
-            # Collect unique file extensions and categorize them
-            extensions = set()
-            extension_categories = {
-                "Image": set(),
-                "Video": set(),
-                "Audio": set(),
-                "Document": set(),
-                "Spreadsheet": set(),
-                "Presentation": set(),
-                "Archive": set(),
-                "Code": set(),
-                "Data": set(),
-                "Executable": set(),
-                "Other": set(),
-            }
-
-            # Track file counts and sizes per category
-            category_stats = {
-                "Image": {"count": 0, "size": 0},
-                "Video": {"count": 0, "size": 0},
-                "Audio": {"count": 0, "size": 0},
-                "Document": {"count": 0, "size": 0},
-                "Spreadsheet": {"count": 0, "size": 0},
-                "Presentation": {"count": 0, "size": 0},
-                "Archive": {"count": 0, "size": 0},
-                "Code": {"count": 0, "size": 0},
-                "Data": {"count": 0, "size": 0},
-                "Executable": {"count": 0, "size": 0},
-                "Other": {"count": 0, "size": 0},
-            }
-
-            # Define extension mappings
-            ext_mapping = {
-                "Image": [
-                    "jpg",
-                    "jpeg",
-                    "png",
-                    "gif",
-                    "bmp",
-                    "svg",
-                    "webp",
-                    "tiff",
-                    "tif",
-                    "ico",
-                    "heic",
-                    "heif",
-                    "raw",
-                    "cr2",
-                    "nef",
-                    "arw",
-                ],
-                "Video": [
-                    "mp4",
-                    "avi",
-                    "mkv",
-                    "mov",
-                    "wmv",
-                    "flv",
-                    "webm",
-                    "m4v",
-                    "mpg",
-                    "mpeg",
-                    "3gp",
-                    "m2ts",
-                    "mts",
-                ],
-                "Audio": [
-                    "mp3",
-                    "wav",
-                    "flac",
-                    "aac",
-                    "ogg",
-                    "wma",
-                    "m4a",
-                    "opus",
-                    "aiff",
-                    "ape",
-                    "alac",
-                ],
-                "Document": [
-                    "pdf",
-                    "doc",
-                    "docx",
-                    "txt",
-                    "rtf",
-                    "odt",
-                    "tex",
-                    "wpd",
-                    "pages",
-                    "md",
-                    "markdown",
-                ],
-                "Spreadsheet": ["xls", "xlsx", "csv", "ods", "numbers", "tsv"],
-                "Presentation": ["ppt", "pptx", "odp", "key"],
-                "Archive": [
-                    "zip",
-                    "rar",
-                    "7z",
-                    "tar",
-                    "gz",
-                    "bz2",
-                    "xz",
-                    "tgz",
-                    "tbz2",
-                    "z",
-                    "iso",
-                    "dmg",
-                ],
-                "Code": [
-                    "py",
-                    "js",
-                    "java",
-                    "cpp",
-                    "c",
-                    "h",
-                    "hpp",
-                    "cs",
-                    "php",
-                    "rb",
-                    "go",
-                    "rs",
-                    "swift",
-                    "kt",
-                    "ts",
-                    "jsx",
-                    "tsx",
-                    "html",
-                    "css",
-                    "scss",
-                    "sass",
-                    "less",
-                    "sql",
-                    "sh",
-                    "bash",
-                    "r",
-                    "m",
-                    "scala",
-                    "pl",
-                    "lua",
-                    "vim",
-                ],
-                "Data": [
-                    "json",
-                    "xml",
-                    "yaml",
-                    "yml",
-                    "toml",
-                    "ini",
-                    "cfg",
-                    "conf",
-                    "log",
-                    "dat",
-                    "db",
-                    "sqlite",
-                    "mdb",
-                    "accdb",
-                ],
-                "Executable": [
-                    "exe",
-                    "msi",
-                    "app",
-                    "deb",
-                    "rpm",
-                    "apk",
-                    "dmg",
-                    "pkg",
-                    "bin",
-                    "run",
-                    "jar",
-                    "bat",
-                    "cmd",
-                    "com",
-                ],
-            }
-
-            # Reverse mapping for quick lookup
-            ext_to_category = {}
-            for category, exts in ext_mapping.items():
-                for ext in exts:
-                    ext_to_category[ext] = category
-
-            for file in files:
-                name = file.get("name", "")
-                file_size = file.get("size", 0)
-
-                if "." in name:
-                    ext = name.rsplit(".", 1)[-1].lower()
-                    extensions.add(ext)
-
-                    # Categorize the extension
-                    category = ext_to_category.get(ext, "Other")
-                    extension_categories[category].add(ext)
-                    category_stats[category]["count"] += 1
-                    category_stats[category]["size"] += file_size
-                else:
-                    extensions.add("(no extension)")
-                    extension_categories["Other"].add("(no extension)")
-                    category_stats["Other"]["count"] += 1
-                    category_stats["Other"]["size"] += file_size
-
-            # Prepare category information for output
-            categories_info = []
-            for category in [
-                "Image",
-                "Video",
-                "Audio",
-                "Document",
-                "Spreadsheet",
-                "Presentation",
-                "Archive",
-                "Code",
-                "Data",
-                "Executable",
-                "Other",
-            ]:
-                if extension_categories[category]:
-                    sorted_exts = sorted(extension_categories[category])
-                    cat_count = category_stats[category]["count"]
-                    cat_size = category_stats[category]["size"]
-                    cat_pct = (cat_count / len(files) * 100) if files else 0
-                    cat_size_pct = (cat_size / total_size * 100) if total_size else 0
-
-                    categories_info.append(
-                        {
-                            "category": category,
-                            "extensions": sorted_exts,
-                            "file_count": cat_count,
-                            "file_percentage": round(cat_pct, 1),
-                            "total_size": cat_size,
-                            "total_size_human": DropboxExplorer._human_readable_size(
-                                cat_size
-                            ),
-                            "size_percentage": round(cat_size_pct, 1),
-                        }
-                    )
-
-            # Check if JSON output is requested
-            if args.json_output:
-                # Prepare restricted items info
-                restricted_files = [
-                    item for item in restricted_items if item.get("type") == "file"
-                ]
-                restricted_folders = [
-                    item for item in restricted_items if item.get("type") == "folder"
-                ]
-
-                # Build JSON output
-                json_output = {
-                    "timestamp": timestamp,
-                    "shared_link": shared_link,
-                    "root_folder": root_folder
-                    if root_folder
-                    else "(root of shared link)",
-                    "statistics": {
-                        "total_items": len(all_items),
-                        "total_files": len(files),
-                        "total_folders": len(folders),
-                        "visited_paths": len(visited_paths),
-                        "total_size": total_size,
-                        "total_size_human": DropboxExplorer._human_readable_size(
-                            total_size
-                        ),
-                        "unique_extensions": len(extensions),
-                        "restricted_items": len(restricted_items),
-                        "restricted_files": len(restricted_files),
-                        "restricted_folders": len(restricted_folders),
-                    },
-                    "categories": categories_info,
-                }
-
-                # Output JSON to stdout
-                print(json.dumps(json_output, indent=2, ensure_ascii=False))
-                sys.exit(0)
-
-            # Display information (human-readable format)
-            logger.info("Session Statistics:")
-            logger.info(f"Timestamp: {timestamp}")
-            logger.info(f"Shared Link: {shared_link}")
-            logger.info(
-                f"Root Folder: {root_folder if root_folder else '(root of shared link)'}"
-            )
-            logger.info(
-                f"Total items: {len(all_items):,} ({len(files):,} files, {len(folders):,} folders)"
-            )
-            logger.info(f"Visited paths: {len(visited_paths):,}")
-            logger.info(
-                f"Total Size: {total_size:,} bytes ({DropboxExplorer._human_readable_size(total_size)})"
-            )
-
-            # Display unique file extensions by category
-            if extensions:
-                logger.info(f"Unique file extensions: {len(extensions):,}")
-                logger.info("Extensions by category:")
-
-                for cat_info in categories_info:
-                    logger.info(
-                        f"  {cat_info['category']}: {', '.join(cat_info['extensions'])}"
-                    )
-                    logger.info(
-                        f"    Files: {cat_info['file_count']:,} ({cat_info['file_percentage']:.1f}%) | Size: {cat_info['total_size_human']} ({cat_info['size_percentage']:.1f}%)"
-                    )
-
-            if restricted_items:
-                restricted_files = [
-                    item for item in restricted_items if item.get("type") == "file"
-                ]
-                restricted_folders = [
-                    item for item in restricted_items if item.get("type") == "folder"
-                ]
-                logger.info(
-                    f"Restricted items: {len(restricted_items):,} ({len(restricted_files):,} files, {len(restricted_folders):,} folders)"
-                )
-
-            logger.success("Inspection complete!")
-            sys.exit(0)
-
-        except Exception as e:
-            logger.error(f"Error inspecting session: {e}")
-            import traceback
-
-            traceback.print_exc()
-            sys.exit(1)
-
-    # Handle extraction mode (-x flag)
-    if args.extract:
-        output_dir = os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
-
-        logger.info("Session Extraction Mode")
-
-        # Get session file - from argument or use default
-        checkpoint_file = None
-
-        if isinstance(args.extract, str):
-            # Session file path provided as argument
-            checkpoint_file = args.extract
-
-            # Auto-append .pkl extension if not present
-            if not checkpoint_file.endswith(".pkl"):
-                checkpoint_file += ".pkl"
-
-            # If not an absolute path, treat it relative to output_dir
-            if not os.path.isabs(checkpoint_file):
-                checkpoint_file = os.path.join(output_dir, checkpoint_file)
-            if not os.path.exists(checkpoint_file):
-                logger.error(f"Session file not found: {checkpoint_file}")
-                sys.exit(1)
-        else:
-            # No argument provided - use default session
-            # Need to determine session name from environment
-            shared_link = os.getenv("DROPBOX_SHARED_LINK", "")
-            root_folder = os.getenv("ROOT_FOLDER", "").strip()
-            if root_folder and not root_folder.startswith("/"):
-                root_folder = "/" + root_folder
-
-            checkpoint_name = determine_checkpoint_name(
-                args.session_name, shared_link, root_folder
-            )
-            checkpoint_file = os.path.join(output_dir, f"{checkpoint_name}.pkl")
-
-            if not os.path.exists(checkpoint_file):
-                logger.error(f"Default session file not found: {checkpoint_file}")
-                logger.info("Use -s <session_name> to specify a different session")
-                sys.exit(1)
-
-        try:
-            logger.info(f"Loading session: {os.path.basename(checkpoint_file)}")
-            with open(checkpoint_file, "rb") as f:
-                checkpoint_data = pickle.load(f)
-
-            logger.info(f"Timestamp: {checkpoint_data.get('timestamp', 'Unknown')}")
-            logger.info(f"Total items: {len(checkpoint_data.get('all_items', []))}")
-
-
-            # Create a temporary explorer instance (no API access needed)
-            explorer = DropboxExplorer(
-                access_token="dummy",  # Not needed for extraction
-                checkpoint_interval=0,
-                output_dir=output_dir,
-            )
-
-            # Load the session data
-            explorer.all_items = checkpoint_data.get("all_items", [])
-            explorer.restricted_items = checkpoint_data.get("restricted_items", [])
-
-            # Rebuild hierarchy from flat list
-            logger.info("Building hierarchy from session data...")
-            entries = explorer.rebuild_hierarchy_from_flat_list()
-            logger.info(f"Built {len(entries)} root-level entries")
-
-            # Export to JSON using session name
-            session_name = os.path.basename(checkpoint_file).replace(".pkl", "")
-            output_file = os.path.join(output_dir, f"{session_name}.json")
-
-            logger.info("Exporting to JSON...")
-            explorer.export_to_json(entries, output_file)
-
-            logger.success("Extraction complete!")
-            sys.exit(0)
-
-        except Exception as e:
-            logger.error(f"Error extracting session: {e}")
-            import traceback
-
-            traceback.print_exc()
-            sys.exit(1)
-
-    logger.info("Dropbox Public Link Explorer")
-
-    # Get configuration from environment variables
-    access_token = os.getenv("DROPBOX_ACCESS_TOKEN")
-    refresh_token = os.getenv("DROPBOX_REFRESH_TOKEN")
-    app_key = os.getenv("DROPBOX_APP_KEY")
-    app_secret = os.getenv("DROPBOX_APP_SECRET")
-
-    if not access_token:
-        logger.error("DROPBOX_ACCESS_TOKEN not found in .env file")
-        logger.info("Setup instructions:")
-        logger.info("  1. Go to https://www.dropbox.com/developers/apps")
-        logger.info("  2. Create an app (or select existing)")
-        logger.info("  3. In 'Permissions' tab, enable 'sharing.read'")
-        logger.info("  4. In 'Settings' tab, generate an access token")
-        logger.info("  5. Add to .env file: DROPBOX_ACCESS_TOKEN=your_token")
-        logger.info("For long-running operations, consider using refresh tokens:")
-        logger.info(
-            "  - Set DROPBOX_REFRESH_TOKEN, DROPBOX_APP_KEY, and DROPBOX_APP_SECRET"
-        )
-        logger.info("  - This prevents token expiration during long operations")
-        sys.exit(1)
-
-    # Get output directory configuration
-    output_dir = os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
-    checkpoint_interval = int(
-        os.getenv("CHECKPOINT_INTERVAL_SECONDS", str(DEFAULT_CHECKPOINT_INTERVAL))
-    )
-
-    # Display configuration
-    logger.info("Configuration:")
-    logger.info(f"  Output directory: {output_dir}")
-    logger.info(f"  Session save interval: {checkpoint_interval} seconds")
-    if refresh_token:
-        logger.info("  Using refresh token (auto-renewal enabled)")
-    else:
-        logger.warning("  Using access token only (may expire during long operations)")
-
-    # Get shared link from environment variable
-    shared_link = os.getenv("DROPBOX_SHARED_LINK")
-
-    if not shared_link:
-        logger.error("DROPBOX_SHARED_LINK not found in .env file")
-        logger.info("Please add your shared link to the .env file:")
-        logger.info("  DROPBOX_SHARED_LINK=https://www.dropbox.com/...")
-        sys.exit(1)
-
-    # Get root folder path (optional, defaults to root of shared link)
-    # Command line argument takes precedence over environment variable
-    if args.root_folder is not None:
-        root_folder = args.root_folder.strip()
-    else:
-        root_folder = os.getenv("ROOT_FOLDER", "").strip()
-
-    # Ensure path starts with / if not empty
-    if root_folder and not root_folder.startswith("/"):
-        root_folder = "/" + root_folder
-
-    logger.info("Using shared link from .env")
-    if root_folder:
-        if args.root_folder is not None:
-            logger.info(f"Starting from folder: {root_folder} (from -p flag)")
-        else:
-            logger.info(f"Starting from folder: {root_folder} (from .env)")
-    else:
-        logger.info("Starting from root of shared link")
-
-    # Determine checkpoint name (priority: -s flag > SESSION_NAME env > auto-generated)
-    if args.session_name:
-        checkpoint_name = args.session_name
-        logger.info(f"Session name: {checkpoint_name} (from -s flag)")
-    else:
-        session_from_env = os.getenv("SESSION_NAME", "").strip()
-        if session_from_env:
-            checkpoint_name = session_from_env
-            logger.info(f"Session name: {checkpoint_name} (from .env)")
-        else:
-            checkpoint_name = generate_checkpoint_name(shared_link, root_folder)
-            logger.info(f"Session name: {checkpoint_name} (auto-generated)")
-
-    # Create explorer instance
     explorer = DropboxExplorer(
         access_token=access_token,
         refresh_token=refresh_token,
