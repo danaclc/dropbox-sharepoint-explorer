@@ -1041,7 +1041,7 @@ def main() -> None:
                     progress["seen"] += 1
                     if progress["seen"] % 1000 == 0:
                         logger.info(
-                            "SharePoint: scanned %d items… latest=%s",
+                            "SharePoint: scanned {} items… latest={}",
                             progress["seen"],
                             path,
                         )
