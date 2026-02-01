@@ -908,10 +908,71 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.provider == "sharepoint":
-        logger.error(
-            "SharePoint provider is not implemented yet. "
-            "For now, run with: --provider dropbox"
-        )
+        from src.providers.sharepoint_graph import load_sp_config, SharePointGraphClient
+
+        cfg = load_sp_config()
+        client = SharePointGraphClient(cfg)
+
+        logger.info("SharePoint: resolving site and drive…")
+        site_id = client.resolve_site_id()
+        drives = client.list_drives(site_id)
+
+        drive_id = drives.get(cfg.drive_name)
+        if not drive_id:
+            logger.error(
+                "SharePoint: drive '%s' not found. Available: %s",
+                cfg.drive_name,
+                ", ".join(sorted(drives.keys())),
+            )
+            return
+
+        root_item = client.resolve_root_item(drive_id)
+        root_id = root_item["id"]
+
+        # Minimal export: flat list (paths) + basic metadata
+        entries = []
+
+        def walk(folder_id: str, parent_path: str) -> None:
+            for item in client.iter_children(drive_id, folder_id):
+                name = item.get("name", "")
+                is_folder = "folder" in item
+                path = f"{parent_path}/{name}".replace("//", "/")
+
+                if is_folder:
+                    entries.append({"type": "folder", "path": path})
+                    walk(item["id"], path)
+                else:
+                    entries.append({
+                        "type": "file",
+                        "path": path,
+                        "size": item.get("size"),
+                        "lastModifiedDateTime": item.get("lastModifiedDateTime"),
+                    })
+
+        logger.info("SharePoint: crawling…")
+        walk(root_id, "")
+
+        # Write JSON next to other outputs (same output dir logic as Dropbox uses)
+        import json
+        from pathlib import Path
+
+        out_dir = Path(os.environ.get("OUTPUT_DIR", "data"))
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        session_name = os.environ.get("SESSION_NAME", "sharepoint_session")
+        out_path = out_dir / f"{session_name}.sharepoint.json"
+
+        payload = {
+            "source": "sharepoint",
+            "site_id": site_id,
+            "drive_name": cfg.drive_name,
+            "root_folder": cfg.root_folder,
+            "count": len(entries),
+            "entries": entries,
+        }
+
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"SharePoint: wrote {out_path}")
         return
 
     # Configure logging from environment variables
